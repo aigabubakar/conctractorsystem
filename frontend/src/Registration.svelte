@@ -137,7 +137,7 @@
                 method: 'POST',
                 credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ rrr: rrr })
+                body: JSON.stringify({ rrr: response.paymentReference || response.transactionId || rrr, transactionId: transactionId, amount: amount || registrationFee })
               });
               const verifyData = await verifyRes.json();
               if (!verifyData.success) throw new Error("Payment Verification Failed");
@@ -252,7 +252,7 @@
         method: 'POST',
         credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rrr: rrr })
+        body: JSON.stringify({ rrr: response.paymentReference || response.transactionId || rrr, transactionId: transactionId, amount: amount || registrationFee })
       });
       const verifyData = await verifyRes.json();
       if (!verifyData.success) throw new Error("Payment Verification Failed");
@@ -338,7 +338,7 @@
               method: 'POST',
               credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ rrr: rrr })
+              body: JSON.stringify({ rrr: response.paymentReference || response.transactionId || rrr, transactionId: transactionId, amount: amount || registrationFee })
             });
             const verifyData = await verifyRes.json();
             

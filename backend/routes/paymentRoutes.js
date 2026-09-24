@@ -3,6 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
+const crypto = require('crypto');
 
 module.exports = (db, logger, verifyToken, authenticateToken, authLimiter, upload, PendingStore) => {
 
@@ -63,33 +64,65 @@ router.post('/api/remita/initiate', async (req, res) => {
 
 
 router.post('/api/remita/verify', async (req, res) => {
-    const { rrr } = req.body;
+    const { rrr, transactionId, amount } = req.body;
     if (!rrr) return res.status(400).json({ error: 'RRR is required.' });
 
     try {
+        // If we have real API keys, verify with Remita Server
+        const merchantId = process.env.REMITA_MERCHANT_ID;
+        const apiKey = process.env.REMITA_API_KEY;
+        const baseUrl = process.env.REMITA_BASE_URL || 'https://remitademo.net';
+        
+        let paymentStatus = 'pending';
+        let paymentAmount = amount;
+        
+        if (merchantId && apiKey) {
+            // Remita Status Check Hash: hash = SHA512(rrr + api_key + merchantId)
+            const hashString = rrr + apiKey + merchantId;
+            const apiHash = crypto.createHash('sha512').update(hashString).digest('hex');
+            
+            const verifyUrl = `${baseUrl}/echannelsvc/${merchantId}/${rrr}/${apiHash}/status.reg`;
+            const remitaRes = await fetch(verifyUrl, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const remitaData = await remitaRes.json();
+            
+            // Remita usually returns message: "Approved" or status: "00" or "01"
+            if (remitaData.status === '00' || remitaData.status === '01' || remitaData.message === 'Approved') {
+                paymentStatus = 'successful';
+                if (remitaData.amount) paymentAmount = remitaData.amount;
+            } else {
+                return res.status(400).json({ error: 'Payment not successful with Remita.', details: remitaData });
+            }
+        } else {
+            // Development fallback if no API keys are provided
+            paymentStatus = 'successful'; 
+        }
+
         // Check off-database JSON store first
-        const pending = PendingStore.get(rrr);
+        const pending = PendingStore.get(rrr) || PendingStore.findByTransactionId(transactionId);
+        
         if (pending) {
             // Check if not already in DB
             const [exists] = await db.query('SELECT id FROM payments WHERE rrr = ?', [rrr]);
             if (exists.length === 0) {
                 await db.query(
                     'INSERT INTO payments (transaction_id, payment_type, company_name, email, phone, rrr, amount, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                    [pending.transaction_id, pending.payment_type, pending.name, pending.email, pending.phone, rrr, pending.amount, 'successful']
+                    [pending.transaction_id || transactionId, pending.payment_type, pending.name, pending.email, pending.phone, rrr, paymentAmount || pending.amount, paymentStatus]
                 );
             }
-            PendingStore.remove(rrr);
+            if (PendingStore.get(rrr)) PendingStore.remove(rrr);
         } else {
             // Fallback: If it's somehow already in the DB as pending (legacy), update it
-            await db.query('UPDATE payments SET status = ? WHERE rrr = ?', ['successful', rrr]);
+            await db.query('UPDATE payments SET status = ? WHERE rrr = ?', [paymentStatus, rrr]);
         }
-        res.json({ success: true, data: { rrr: rrr, status: 'successful' } });
+        res.json({ success: true, data: { rrr: rrr, status: paymentStatus } });
     } catch (err) {
         logger.error(err);
         res.status(500).json({ error: 'Failed to verify payment.' });
     }
 });
-
 
 router.post('/api/remita/bypass', async (req, res) => {
     const { name, email, phone, payment_type = 'registration', amount = 10000.00 } = req.body;
